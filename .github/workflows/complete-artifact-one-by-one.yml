@@ -1,92 +1,87 @@
 name: Build One by One (anyone)
+
 on:
   workflow_dispatch:
     inputs:
-      armbian_board:
-        description: 'Board name (e.g. hinlink-ht2)'
-        required: true
-        default: 'hinlink-ht2'
+      armbian_target:
         type: choice
+        description: 'Target'
         options:
-          - hinlink-ht2
-      armbian_userspace:
-        description: 'Userspace (jammy = Ubuntu 22.04)'
-        required: true
-        default: 'jammy'
-        type: choice
-        options:
-          - jammy
-          - focal
-          - bookworm
-          - bullseye
+          - image
+          - kernel
+          - build
+        default: image
       armbian_kernel_branch:
-        description: 'Kernel branch (vendor = rk3528a 适配)'
-        required: true
-        default: 'vendor'
         type: choice
+        description: 'Kernel branch'
         options:
-          - vendor
+          - Legacy
           - current
           - edge
-      armbian_ui:
-        description: 'User Interface (xfce = 轻量桌面)'
-        required: true
-        default: 'xfce'
+          - vendor  # 新增：支持rk内核（适配设备需求）
+        default: 'current'
+      armbian_release:
         type: choice
+        description: 'Userspace'
         options:
+          - jammy
+          - mantic
+          - bookworm
+        default: bookworm
+      armbian_ui:
+        type: choice
+        description: 'User interface (not all works)'
+        options:
+          - minimal
           - xfce
           - gnome
           - kde
-          - mate
-          - minimal
+        default: minimal
+      armbian_board:
+        type: string
+        description: 'Board'
+        required: true
+        default: hinlink-ht2  # 默认填充目标设备
       armbian_version:
-        description: 'Armbian version (24.5.0-trunk = 兼容版)'
-        required: true
-        default: '24.5.0-trunk'
-      armbian_build_target:
-        description: 'Build target'
-        required: true
-        default: 'image'
-        type: choice
-        options:
-          - image
-          - rootfs
-          - kernel
-          - uboot
-          - dtb
+        type: string
+        description: 'Version'
+        required: false
+        default: '24.5.0-trunk'  # 默认适配新版本
+      armbian_release_tittle:
+        type: string
+        description: 'Release title'
+        required: false
+        default: "Armbian SDK"
+      armbian_release_body:
+        type: string
+        description: 'Release body'
+        required: false
+        default: "Virtual images for ×86 and arm64"
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout Armbian OS repo
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          repository: armbian/os
-          ref: main
-          fetch-depth: 0
 
-      - name: Build Armbian image
-        uses: armbian/build@main  # 升级到最新兼容版本
+      - name: Build Armbian
+        uses: armbian/build@main  # 已更新为main分支（替换旧版v24.2.1）
         with:
-          armbian_board: ${{ inputs.armbian_board }}
-          armbian_userspace: ${{ inputs.armbian_userspace }}
-          armbian_kernel_branch: ${{ inputs.armbian_kernel_branch }}
-          armbian_ui: ${{ inputs.armbian_ui }}
-          armbian_version: ${{ inputs.armbian_version }}
-          armbian_build_target: ${{ inputs.armbian_build_target }}
-          armbian_config: |
-            ENABLE_SSH=yes  # 默认开启 SSH（方便调试）
-            USER_NAME=armbian  # 默认用户名
-            USER_PASSWORD=1234  # 默认密码（可自行修改）
-            ROOT_PASSWORD=1234  # root 密码（可自行修改）
-            IMAGE_TYPE=desktop  # 强制桌面版镜像
-            STORAGE_DEVICE=mmc  # 适配 HT2 eMMC/SD 卡启动
-            BOOT_LOGO=armbian  # 保留默认 logo
+          armbian_token: "${{secrets.GITHUB_TOKEN}}"
+          armbian_target: "${{inputs.armbian_target}}"
+          armbian_release: "${{inputs.armbian_release}}"
+          armbian_kernel_branch: "${{inputs.armbian_kernel_branch}}"
+          armbian_ui: "${{inputs.armbian_ui}}"
+          armbian_board: "${{inputs.armbian_board}}"
+          armbian_version: "${{inputs.armbian_version}}"  # 新增：传递版本参数
+          armbian_release_tittle: "${{inputs.armbian_release_tittle}}"
+          armbian_release_body: "${{inputs.armbian_release_body}}"
+          armbian_pgp_key: "${{secrets.GPG_KEY1}}"
+          armbian_pgp_password: "${{secrets.GPG_PASSPHRASE1}}"
 
-      - name: Upload artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: armbian-hinlink-ht2-ubuntu22.04-xfce
-          path: ${{ github.workspace }}/output/images/*.img.xz  # 镜像压缩包路径
-          retention-days: 30  # 镜像保留 30 天
+          name: Armbian-${{inputs.armbian_board}}-${{inputs.armbian_release}}-${{inputs.armbian_kernel_branch}}
+          path: ./output/*
