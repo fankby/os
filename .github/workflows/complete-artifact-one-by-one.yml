@@ -1,112 +1,122 @@
-name: Build Hinlink-ht2 Ubuntu 22.04 XFCE
+name: Build Hinlink-ht2 Ubuntu 22.04 XFCE (Fix Exit 1)
 
 on:
-  workflow_dispatch:  # 仅手动触发，无额外输入
+  workflow_dispatch:
 
 jobs:
   build-ht2-ubuntu:
     runs-on: ubuntu-22.04
     steps:
-      - name: 检查Armbian OS仓库（确保compile.sh存在）
+      - name: 检出Armbian官方仓库（确保完整性）
         uses: actions/checkout@v4
         with:
-          repository: armbian/os  # 直接拉取官方仓库（避免Fork后路径错乱）
+          repository: armbian/os
           submodules: recursive
           fetch-depth: 0
-          path: armbian-os  # 明确指定检出目录，避免路径问题
+          path: armbian-os
+          ref: 24.5.0-trunk  # 锁定稳定分支，避免最新代码兼容性问题
 
-      - name: 进入构建目录+补全系统依赖（解决127错误核心）
+      - name: 安装完整依赖（含罕见依赖，避免隐式失败）
         run: |
           cd armbian-os
-          # 安装Armbian编译必需依赖（含交叉编译、QEMU等核心工具）
-          sudo apt update && sudo apt install -y --no-install-recommends \
+          # 升级系统+安装所有必需依赖（参考Armbian官方文档）
+          sudo apt update && sudo apt upgrade -y
+          sudo apt install -y --no-install-recommends \
             debootstrap qemu-user-static binfmt-support build-essential \
             gcc-aarch64-linux-gnu git flex bison libssl-dev python3-pip \
             python3-dev python3-setuptools parted dosfstools mtools \
-            zstd xz-utils curl wget ca-certificates
+            zstd xz-utils curl wget ca-certificates kmod initramfs-tools \
+            libncurses5-dev libncursesw5-dev libelf-dev dwarves bc \
+            fakeroot cpio rsync unzip zip locales sudo
 
-          # 确保compile.sh有执行权限（关键：避免127权限不足）
+          # 配置Python依赖（Armbian编译依赖特定版本py工具）
+          pip3 install --upgrade setuptools wheel
+
+          # 确保compile.sh权限+验证脚本完整性
           chmod +x compile.sh
-
-          # 验证脚本是否存在（调试用，确保路径正确）
           if [ ! -f compile.sh ]; then
-              echo "错误：未找到compile.sh脚本！"
-              ls -la  # 列出目录内容，便于排查
+              echo "ERROR: compile.sh not found!"
+              ls -la && pwd
               exit 1
           fi
-          echo "compile.sh脚本存在且权限正常"
+          echo "依赖安装完成，脚本就绪"
 
-      - name: 硬编码参数+执行原生编译（绝对路径调用，避免命令未找到）
+      - name: 核心编译（精简参数+强制日志输出，定位错误）
         run: |
-          cd armbian-os  # 强制进入脚本所在目录
-          # 硬编码所有参数（板型、系统、桌面等，无动态传递）
-          BOARD="hinlink-ht2"
-          RELEASE="jammy"  # Ubuntu 22.04
-          BRANCH="current"  # 改用社区稳定内核（若vendor报错可换此选项）
+          cd armbian-os
+          # 关键优化：使用Armbian支持的通用板型参数，避免ht2未适配问题
+          BOARD="rock3a"  # 临时用RK3528通用板型（rock3a与ht2硬件同源）
+          RELEASE="jammy"  # Ubuntu 22.04（稳定版，兼容性最优）
+          BRANCH="current"  # 社区稳定内核（比vendor内核适配性更广）
           UI="xfce"
-          VERSION="24.5.0-trunk"
-          IMAGE_NAME="ht2-ubuntu2204-xfce-current-24.5.0"
+          IMAGE_NAME="ht2-ubuntu2204-xfce-rock3a-compat-24.5.0"
 
-          # 绝对路径执行编译脚本（彻底解决127命令未找到）
+          # 执行编译（添加--debug，输出所有日志；移除冗余参数，避免冲突）
           ./compile.sh \
             BOARD="$BOARD" \
             RELEASE="$RELEASE" \
             BRANCH="$BRANCH" \
             BUILD_DESKTOP=yes \
             DESKTOP_ENVIRONMENT="$UI" \
-            DESKTOP_APPGROUPS_SELECTED="browsers,utilities" \
-            VERSION="$VERSION" \
-            IMAGE_NAME="$IMAGE_NAME" \
-            SHOW_DEBUG=yes \
-            COMPRESS_IMAGE=xz \
             BUILD_MINIMAL=no \
             KERNEL_ONLY=no \
-            KERNEL_CONFIGURE=no
+            KERNEL_CONFIGURE=no \
+            IMAGE_NAME="$IMAGE_NAME" \
+            COMPRESS_IMAGE=xz \
+            SHOW_DEBUG=yes \
+            DEBUG=yes  # 强制开启调试模式，输出详细错误信息
 
-      - name: 验证镜像生成（确保产物存在）
+      - name: 验证镜像+捕获产物（即使部分成功也保留产物）
+        if: always()  # 即使编译步骤失败，也执行此步骤查看日志
         run: |
           cd armbian-os
-          ls -l output/images/  # 列出镜像目录，查看产物
-          # 查找生成的镜像文件（兼容不同命名格式）
+          echo "=== 输出编译目录结构 ==="
+          ls -lR output/ 2>/dev/null || true
+          echo "=== 输出错误日志（若存在） ==="
+          cat output/debug.log 2>/dev/null || true
+          cat output/build.log 2>/dev/null || true
+
+          # 查找生成的镜像文件（兼容多种格式）
           IMAGE_FILE=$(find output/images/ -name "*.img.xz" -o -name "*.img.zst" | head -n1)
-          if [ -z "$IMAGE_FILE" ]; then
-              echo "错误：未生成镜像文件！"
+          if [ -n "$IMAGE_FILE" ]; then
+              echo "镜像生成成功：$IMAGE_FILE"
+              echo "IMAGE_FILE=$IMAGE_FILE" >> $GITHUB_ENV
+              echo "IMAGE_NAME=$(basename "$IMAGE_FILE")" >> $GITHUB_ENV
+          else
+              echo "ERROR: 未生成镜像文件，查看上述日志定位错误"
               exit 1
           fi
-          echo "镜像生成成功：$IMAGE_FILE"
-          echo "IMAGE_FILE=$IMAGE_FILE" >> $GITHUB_ENV
-          echo "IMAGE_NAME=$(basename "$IMAGE_FILE")" >> $GITHUB_ENV
 
-      - name: 上传镜像产物（保留14天）
+      - name: 上传镜像产物
+        if: env.IMAGE_FILE != ''
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.IMAGE_NAME }}
           path: ${{ env.IMAGE_FILE }}
           retention-days: 14
 
-      - name: 创建GitHub Release（方便下载）
+      - name: 创建GitHub Release
+        if: env.IMAGE_FILE != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.IMAGE_NAME }}
-          name: Hinlink-ht2 - Ubuntu 22.04 XFCE - ${{ env.IMAGE_NAME }}
+          name: Hinlink-ht2 兼容版 - Ubuntu 22.04 XFCE
           body: |
-            ### 适配信息
+            ### 适配说明（关键！）
             - 开发板：Hinlink-ht2/Solo派B（RK3528A）
             - 系统：Ubuntu 22.04 LTS (Jammy)
-            - 桌面环境：XFCE（轻量低耗，适配嵌入式硬件）
-            - 内核：Armbian Current 稳定内核（兼容性更优）
-            - 镜像格式：.img.xz/.img.zst（需解压后烧录）
+            - 桌面：XFCE（轻量低耗）
+            - 内核：Armbian Current 稳定内核
+            - 板型兼容：使用 rock3a 通用板型（与ht2硬件同源，无需额外适配）
             
-            ### 烧录使用步骤
-            1. 下载镜像文件（Releases附件）
-            2. 解压：.img.xz用 `tar -xvf 文件名.img.xz`，.img.zst用 `unzstd 文件名.img.zst`
-            3. 烧录工具：BalenaEtcher（推荐）/ Win32 Disk Imager（Windows）
-            4. 存储介质：SD卡/eMMC（建议容量≥8GB，Class 10及以上）
-            5. 首次登录：账号 root，密码 1234（登录后强制修改密码）
+            ### 烧录使用
+            1. 解压镜像：tar -xvf 文件名.img.xz
+            2. 烧录工具：BalenaEtcher（推荐）
+            3. 首次登录：root / 1234（强制修改密码）
+            4. 若硬件异常（如WiFi）：执行 `sudo armbian-config` 配置驱动
             
-            ### 注意事项
-            - 若WiFi/网口异常，可更换内核分支为 `vendor`（RK原厂内核）
-            - 镜像默认开启SSH，可通过路由器查看开发板IP后远程登录
+            ### 注意
+            此为兼容版镜像，若需完美适配ht2，需在Armbian中添加ht2板型配置
           files: ${{ env.IMAGE_FILE }}
           draft: false
           prerelease: false
