@@ -369,7 +369,7 @@ jobs:
           armbian_release:            "${{inputs.armbian_release}}"
           armbian_kernel_branch:      "${{inputs.armbian_kernel_branch}}"
           armbian_ui:                 "${{inputs.armbian_ui}}"
-          armbian_version：           "${{inputs.armbian_version}}"
+          armbian_version:          "${{inputs.armbian_version}}"
           armbian_board:              "${{inputs.armbian_board}}"
           armbian_release_tittle:     "Armbian SDK"
           armbian_release_body:       "Virtual images for x86 and arm64"
