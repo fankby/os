@@ -1,132 +1,87 @@
-name: Build One by One (anyone)
+name: Build Hinlink-ht2 Ubuntu 22.04 XFCE
 
 on:
-  workflow_dispatch:
-    inputs:
-      armbian_kernel_branch:
-        type: choice
-        description: 'Kernel branch'
-        options:
-          - Legacy
-          - current
-          - edge
-          - vendor
-        default: 'vendor'
-      armbian_release:
-        type: choice
-        description: 'Release (Ubuntu 22.04=jammy)'
-        options:
-          - focal
-          - jammy
-          - lunar
-          - mantic
-          - noble
-          - bookworm
-          - trixie
-          - sid
-        default: 'jammy'
-      armbian_ui:
-        type: choice
-        description: 'User interface (桌面环境)'
-        options:
-          - minimal
-          - xfce
-          - gnome
-          - kde
-          - mate
-          - i3wm
-        default: 'xfce'
-      armbian_version:
-        type: string
-        description: 'Version (e.g., 24.5.0-trunk)'
-        required: true
-        default: '24.5.0-trunk'
-      armbian_board:
-        type: string
-        description: 'Board (必须填hinlink-ht2)'
-        required: true
-        default: 'hinlink-ht2'
-      armbian_release_tag:
-        type: string
-        description: 'Release tag (镜像名称标签)'
-        required: true
-        default: '24.5.0-trunk-ht2-ubuntu2204-xfce'
+  workflow_dispatch:  # 仅手动触发，无需输入参数（全硬编码）
 
 jobs:
-  build:
+  build-ht2-ubuntu:
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout code
+      - name: Checkout Armbian OS repo
         uses: actions/checkout@v4
         with:
+          repository: armbian/os
           submodules: recursive
-          fetch-depth: 0  # 拉取完整仓库历史，避免依赖缺失
+          fetch-depth: 0
 
-      - name: Build Armbian (Ubuntu 22.04 XFCE - 适配Hinlink-ht2)
-        uses: armbian/build@main
-        with:
-          # 核心必填参数（严格遵循Armbian官方文档）
-          armbian_token: "${{ secrets.GITHUB_TOKEN }}"
-          armbian_target: "artifact"  # 唯一有效值，生成包含镜像的压缩包
-          armbian_board: "${{ inputs.armbian_board }}"
-          armbian_release: "${{ inputs.armbian_release }}"
-          armbian_kernel_branch: "${{ inputs.armbian_kernel_branch }}"
-          armbian_ui: "${{ inputs.armbian_ui }}"
-          armbian_version: "${{ inputs.armbian_version }}"
-          armbian_release_tag: "${{ inputs.armbian_release_tag }}"
-          armbian_release_tittle: "Armbian-Hinlink-ht2-Ubuntu2204-XFCE"
-          armbian_release_body: "适配Hinlink-ht2 | Ubuntu 22.04 LTS | XFCE桌面 | Vendor内核"
-          
-          # 可选参数（确保官方支持）
-          armbian_compress: "xz"  # 压缩格式：xz（默认支持）
-          armbian_artifacts: "image"  # 明确输出镜像产物（官方支持的有效值）
-          
-          # 移除所有非官方参数（避免Unknown argument错误）
-          armbian_pgp_key: ""
-          armbian_pgp_password: ""
-
-      - name: 验证产物并解压镜像
+      - name: 安装构建依赖（修复环境缺失）
         run: |
-          # 查看artifact目录下的产物（Armbian默认输出压缩包）
-          ls -l output/artifact/
-          
-          # 解压镜像压缩包到images目录（便于后续上传）
-          mkdir -p output/images
-          find output/artifact/ -name "*.img.xz" -exec cp {} output/images/ \;
-          
-          # 验证镜像文件是否存在
-          if [ -z "$(find output/images/ -name '*.img.xz')" ]; then
+          sudo apt update
+          sudo apt install -y --no-install-recommends \
+            debootstrap qemu-user-static binfmt-support \
+            build-essential gcc-aarch64-linux-gnu git \
+            flex bison libssl-dev python3-pip
+
+      - name: 硬编码构建参数（避免传递丢失）
+        run: |
+          echo "BOARD=hinlink-ht2" >> $GITHUB_ENV
+          echo "RELEASE=jammy" >> $GITHUB_ENV  # Ubuntu 22.04
+          echo "BRANCH=vendor" >> $GITHUB_ENV  # RK原厂内核
+          echo "UI=xfce" >> $GITHUB_ENV  # 桌面环境
+          echo "VERSION=24.5.0-trunk" >> $GITHUB_ENV
+          echo "TAG=ht2-ubuntu2204-xfce-vendor-24.5.0" >> $GITHUB_ENV
+
+      - name: 执行Armbian原生编译脚本（绕开Action参数陷阱）
+        run: |
+          # 直接调用Armbian原生compile.sh，避免Action参数传递问题
+          bash compile.sh \
+            BOARD=${{ env.BOARD }} \
+            RELEASE=${{ env.RELEASE }} \
+            BRANCH=${{ env.BRANCH }} \
+            BUILD_DESKTOP=yes \
+            DESKTOP_ENVIRONMENT=${{ env.UI }} \
+            DESKTOP_APPGROUPS_SELECTED="browsers,utilities" \
+            VERSION=${{ env.VERSION }} \
+            IMAGE_NAME="${{ env.TAG }}" \
+            SHOW_DEBUG=yes \
+            COMPRESS_IMAGE=xz
+
+      - name: 验证镜像生成
+        run: |
+          ls -l output/images/
+          # 检查是否生成镜像文件
+          IMAGE_FILE=$(find output/images/ -name "*.img.xz" | head -n1)
+          if [ -z "$IMAGE_FILE" ]; then
               echo "错误：未生成镜像文件！"
               exit 1
           fi
-          echo "镜像文件生成成功：$(find output/images/ -name '*.img.xz')"
+          echo "镜像生成成功：$IMAGE_FILE"
+          echo "IMAGE_FILE=$IMAGE_FILE" >> $GITHUB_ENV
 
       - name: 上传镜像产物
         uses: actions/upload-artifact@v4
         with:
-          name: "${{ inputs.armbian_release_tag }}"
-          path: output/images/*.img.xz
-          retention-days: 7
+          name: ${{ env.TAG }}
+          path: ${{ env.IMAGE_FILE }}
+          retention-days: 14
 
       - name: 创建GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "${{ inputs.armbian_release_tag }}"
-          name: "Armbian ${{ inputs.armbian_version }} - Hinlink-ht2 - Ubuntu 22.04 XFCE"
+          tag_name: ${{ env.TAG }}
+          name: Hinlink-ht2 - Ubuntu 22.04 XFCE - ${{ env.VERSION }}
           body: |
-            ### 适配信息
+            ### 核心信息
             - 开发板：Hinlink-ht2/Solo派B（RK3528A）
             - 系统：Ubuntu 22.04 LTS (Jammy)
-            - 桌面环境：XFCE（轻量低耗，适配嵌入式硬件）
-            - 内核：${{ inputs.armbian_kernel_branch }}（RK原厂内核，硬件兼容性最优）
-            - 镜像格式：.img.xz（需解压为.img文件后烧录）
+            - 桌面：XFCE（轻量低耗）
+            - 内核：RK原厂Vendor内核
+            - 镜像格式：.img.xz（需解压后烧录）
             
-            ### 使用步骤
-            1. 下载镜像文件（.img.xz）
-            2. 解压得到.img格式镜像（推荐使用7-Zip或tar命令：tar -xvf xxx.img.xz）
-            3. 用BalenaEtcher/Win32 Disk Imager烧录到SD卡/eMMC（建议容量≥8GB）
-            4. 插入开发板，连接HDMI显示器+键盘鼠标，上电启动
-            5. 首次登录：账号root，密码1234（登录后强制修改密码）
-          files: output/images/*.img.xz
+            ### 烧录使用
+            1. 下载镜像并解压（tar -xvf xxx.img.xz）
+            2. 用BalenaEtcher烧录到SD卡/eMMC（≥8GB）
+            3. 首次登录：root / 1234（强制修改密码）
+          files: ${{ env.IMAGE_FILE }}
           draft: false
           prerelease: false
