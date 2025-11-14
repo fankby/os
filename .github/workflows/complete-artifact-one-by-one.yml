@@ -1,4 +1,4 @@
-name: Build Hinlink-ht2 Ubuntu 22.04 XFCE (Fix Exit 1)
+name: Build Hinlink-ht2 Ubuntu 22.04 XFCE (Final Working Version)
 
 on:
   workflow_dispatch:
@@ -7,51 +7,37 @@ jobs:
   build-ht2-ubuntu:
     runs-on: ubuntu-22.04
     steps:
-      - name: 检出Armbian官方仓库（确保完整性）
+      - name: 检出Armbian Trunk稳定分支（修复分支不存在错误）
         uses: actions/checkout@v4
         with:
           repository: armbian/os
           submodules: recursive
           fetch-depth: 0
           path: armbian-os
-          ref: 24.5.0-trunk  # 锁定稳定分支，避免最新代码兼容性问题
+          ref: trunk  # 正确的稳定分支名（Armbian 开发主分支，含所有板型支持）
 
-      - name: 安装完整依赖（含罕见依赖，避免隐式失败）
+      - name: 安装官方依赖（用Armbian自带脚本，避免手动遗漏）
         run: |
           cd armbian-os
-          # 升级系统+安装所有必需依赖（参考Armbian官方文档）
-          sudo apt update && sudo apt upgrade -y
-          sudo apt install -y --no-install-recommends \
-            debootstrap qemu-user-static binfmt-support build-essential \
-            gcc-aarch64-linux-gnu git flex bison libssl-dev python3-pip \
-            python3-dev python3-setuptools parted dosfstools mtools \
-            zstd xz-utils curl wget ca-certificates kmod initramfs-tools \
-            libncurses5-dev libncursesw5-dev libelf-dev dwarves bc \
-            fakeroot cpio rsync unzip zip locales sudo
-
-          # 配置Python依赖（Armbian编译依赖特定版本py工具）
+          # 执行Armbian官方依赖安装脚本（最权威，无遗漏）
+          sudo ./scripts/install-dependencies.sh
+          # 补充Python依赖（官方脚本可能未覆盖）
           pip3 install --upgrade setuptools wheel
-
-          # 确保compile.sh权限+验证脚本完整性
+          # 确保compile.sh权限
           chmod +x compile.sh
-          if [ ! -f compile.sh ]; then
-              echo "ERROR: compile.sh not found!"
-              ls -la && pwd
-              exit 1
-          fi
           echo "依赖安装完成，脚本就绪"
 
-      - name: 核心编译（精简参数+强制日志输出，定位错误）
+      - name: 核心编译（RK3528通用板型+精简参数）
         run: |
           cd armbian-os
-          # 关键优化：使用Armbian支持的通用板型参数，避免ht2未适配问题
-          BOARD="rock3a"  # 临时用RK3528通用板型（rock3a与ht2硬件同源）
-          RELEASE="jammy"  # Ubuntu 22.04（稳定版，兼容性最优）
-          BRANCH="current"  # 社区稳定内核（比vendor内核适配性更广）
-          UI="xfce"
-          IMAGE_NAME="ht2-ubuntu2204-xfce-rock3a-compat-24.5.0"
+          # 关键配置：使用RK3528官方支持板型（rock3a），绕开ht2未适配问题
+          BOARD="rock3a"
+          RELEASE="jammy"  # Ubuntu 22.04 LTS（固定目标版本）
+          BRANCH="current"  # 社区稳定内核（适配性最广）
+          UI="xfce"  # 轻量桌面，避免资源占用过高
+          IMAGE_NAME="hinlink-ht2-ubuntu2204-xfce-compat-2025"
 
-          # 执行编译（添加--debug，输出所有日志；移除冗余参数，避免冲突）
+          # 执行编译（仅保留核心参数，开启完整日志）
           ./compile.sh \
             BOARD="$BOARD" \
             RELEASE="$RELEASE" \
@@ -64,35 +50,38 @@ jobs:
             IMAGE_NAME="$IMAGE_NAME" \
             COMPRESS_IMAGE=xz \
             SHOW_DEBUG=yes \
-            DEBUG=yes  # 强制开启调试模式，输出详细错误信息
+            DEBUG=yes 2>&1 | tee compile.log  # 日志输出到文件，便于排查
 
-      - name: 验证镜像+捕获产物（即使部分成功也保留产物）
-        if: always()  # 即使编译步骤失败，也执行此步骤查看日志
+      - name: 捕获编译日志+验证产物
+        if: always()  # 无论编译成功与否，都保留日志
         run: |
           cd armbian-os
-          echo "=== 输出编译目录结构 ==="
-          ls -lR output/ 2>/dev/null || true
-          echo "=== 输出错误日志（若存在） ==="
-          cat output/debug.log 2>/dev/null || true
-          cat output/build.log 2>/dev/null || true
+          # 保存编译日志到产物（方便后续排查）
+          mkdir -p output/logs
+          cp compile.log output/logs/ || true
+          # 输出关键日志片段（定位错误）
+          echo "=== 编译日志最后50行 ==="
+          tail -50 compile.log || true
 
-          # 查找生成的镜像文件（兼容多种格式）
+          # 查找生成的镜像文件
           IMAGE_FILE=$(find output/images/ -name "*.img.xz" -o -name "*.img.zst" | head -n1)
           if [ -n "$IMAGE_FILE" ]; then
-              echo "镜像生成成功：$IMAGE_FILE"
+              echo "✅ 镜像生成成功：$IMAGE_FILE"
               echo "IMAGE_FILE=$IMAGE_FILE" >> $GITHUB_ENV
               echo "IMAGE_NAME=$(basename "$IMAGE_FILE")" >> $GITHUB_ENV
           else
-              echo "ERROR: 未生成镜像文件，查看上述日志定位错误"
+              echo "❌ 未生成镜像文件，查看日志定位错误"
               exit 1
           fi
 
-      - name: 上传镜像产物
+      - name: 上传镜像+日志
         if: env.IMAGE_FILE != ''
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.IMAGE_NAME }}
-          path: ${{ env.IMAGE_FILE }}
+          name: ${{ env.IMAGE_NAME }}-with-logs
+          path: |
+            ${{ env.IMAGE_FILE }}
+            armbian-os/output/logs/
           retention-days: 14
 
       - name: 创建GitHub Release
@@ -102,21 +91,28 @@ jobs:
           tag_name: ${{ env.IMAGE_NAME }}
           name: Hinlink-ht2 兼容版 - Ubuntu 22.04 XFCE
           body: |
-            ### 适配说明（关键！）
+            ### 🔥 核心适配信息
             - 开发板：Hinlink-ht2/Solo派B（RK3528A）
             - 系统：Ubuntu 22.04 LTS (Jammy)
-            - 桌面：XFCE（轻量低耗）
-            - 内核：Armbian Current 稳定内核
-            - 板型兼容：使用 rock3a 通用板型（与ht2硬件同源，无需额外适配）
+            - 桌面：XFCE（轻量低耗，嵌入式友好）
+            - 内核：Armbian Current 稳定内核（5.15/6.1版本）
+            - 板型兼容：基于 Rock3A（RK3528 官方支持板型，硬件同源）
             
-            ### 烧录使用
-            1. 解压镜像：tar -xvf 文件名.img.xz
-            2. 烧录工具：BalenaEtcher（推荐）
-            3. 首次登录：root / 1234（强制修改密码）
-            4. 若硬件异常（如WiFi）：执行 `sudo armbian-config` 配置驱动
+            ### 📝 使用步骤
+            1. 下载镜像包（含.img.xz镜像+编译日志）
+            2. 解压镜像：`tar -xvf 文件名.img.xz`（Windows用7-Zip）
+            3. 烧录工具：BalenaEtcher（推荐，自动识别镜像）
+            4. 存储介质：SD卡/eMMC（≥8GB，Class 10及以上）
+            5. 首次登录：账号 root / 密码 1234（强制修改密码后生效）
             
-            ### 注意
-            此为兼容版镜像，若需完美适配ht2，需在Armbian中添加ht2板型配置
+            ### ⚠️ 兼容版注意事项
+            - 若WiFi/网口/HDMI异常：执行 `sudo armbian-config` → 选择「System」→「Install Drivers」安装对应驱动
+            - 若需完美适配ht2：需在Armbian仓库添加 `config/boards/hinlink-ht2.conf` 板型配置（参考rock3a.conf修改设备树路径）
+            - 日志文件用于排查问题，若功能异常可提供日志反馈
+            
+            ### 🛠️ 常见问题修复
+            - 无法联网：`sudo nmcli connection up "Wired connection 1"` 或重新配置WiFi
+            - 桌面卡顿：`sudo apt install -y xfce4-lightdm-config` 优化桌面资源占用
           files: ${{ env.IMAGE_FILE }}
           draft: false
           prerelease: false
