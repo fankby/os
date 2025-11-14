@@ -10,8 +10,8 @@ on:
           - current
           - edge
           - legacy
-          - vendor  # 新增：支持RK3528A原厂内核
-        default: 'current'
+          - vendor  # 支持RK3528A原厂内核，适配HT2硬件
+        default: 'vendor'  # 原厂内核稳定性更优
       armbian_kernel_branch:
         type: choice
         description: 'Kernel branch'
@@ -19,80 +19,91 @@ on:
           - Legacy
           - current
           - edge
-          - vendor  # 新增：支持RK原厂内核分支
-        default: 'current'
+          - vendor
+        default: 'vendor'  # 与内核类型对应
       armbian_release:
         type: choice
-        description: 'Release'
+        description: 'Release (Ubuntu 22.04=jammy)'
         options:
           - focal
-          - jammy
+          - jammy  # Ubuntu 22.04 LTS（目标版本）
           - lunar
           - mantic
           - noble
           - bookworm
           - trixie
           - sid
-        default: 'noble'  # 适配Ubuntu 24.04
+        default: 'jammy'  # 预设为Ubuntu 22.04
       armbian_ui:
         type: choice
-        description: 'User interface'
+        description: 'User interface (桌面环境)'
         options:
           - minimal
-          - xfce
+          - xfce  # 轻量桌面，适合嵌入式开发板
           - gnome
           - kde
           - mate
           - i3wm
-        default: 'xfce'
+        default: 'xfce'  # 预设XFCE桌面（资源占用低）
       armbian_version:
         type: string
         description: 'Version (e.g., 24.5.0-trunk)'
         required: true
-        default: '24.5.0-trunk'
+        default: '24.5.0-trunk'  # 稳定版本
       armbian_board:
         type: string
-        description: 'Board (e.g., hinlink-ht2)'
+        description: 'Board (必须填hinlink-ht2)'
         required: true
-        default: 'hinlink-ht2'  # HT2开发板型号
+        default: 'hinlink-ht2'  # HT2开发板型号（固定）
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Build artifact
-        uses: armbian/build@main  # 原v24.2.1改为main，使用最新稳定版
+      - name: Build Armbian (Ubuntu 22.04 桌面版)
+        uses: armbian/build@main  # 最新分支，避免兼容性问题
         with:
           armbian_token: "${{ secrets.GITHUB_TOKEN }}"
           armbian_target: "artifact"
-          armbian_release: "${{ inputs.armbian_release }}"
+          armbian_release: "${{ inputs.armbian_release }}"  # 传递Ubuntu 22.04参数
           armbian_kernel_branch: "${{ inputs.armbian_kernel_branch }}"
-          armbian_ui: "${{ inputs.armbian_ui }}"
-          armbian_board: "${{ inputs.armbian_board }}"
-          armbian_release_title: "Armbian ${{ inputs.armbian_version }} for ${{ inputs.armbian_board }}"
-          armbian_release_body: "Custom build for Hinlink-ht2/Solo派B"
+          armbian_ui: "${{ inputs.armbian_ui }}"  # 传递桌面环境参数
+          armbian_board: "${{ inputs.armbian_board }}"  # 传递HT2板型
+          armbian_release_title: "Armbian Ubuntu 22.04 桌面版 for Hinlink-ht2"
+          armbian_release_body: "适配Hinlink-ht2/Solo派B，内核：${{ inputs.armbian_kernel_branch }}，桌面：XFCE"
           armbian_pgp_key: "${{ secrets.GPG_KEY1 }}"
           armbian_pgp_password: "${{ secrets.GPG_PASSPHRASE1 }}"
-          armbian_version: "${{ inputs.armbian_version }}"  # 新增：传递版本参数
+          armbian_version: "${{ inputs.armbian_version }}"  # 传递版本参数
 
-      - name: Upload artifact
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: armbian-artifact-${{ inputs.armbian_board }}-${{ inputs.armbian_release }}-${{ inputs.armbian_ui }}
+          name: Armbian-Ubuntu22.04-XFCE-Hinlink-ht2
           path: output/artifact/*
-          retention-days: 7
+          retention-days: 7  #  artifacts保留7天
 
-      - name: Create release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "${{ inputs.armbian_version }}-${{ inputs.armbian_board }}-${{ inputs.armbian_release }}-${{ inputs.armbian_ui }}"
-          name: "Armbian ${{ inputs.armbian_version }} - ${{ inputs.armbian_board }} - ${{ inputs.armbian_release }} - ${{ inputs.armbian_ui }}"
-          body: "Custom build for Hinlink-ht2/Solo派B. Kernel: ${{ inputs.armbian_kernel_branch }}, UI: ${{ inputs.armbian_ui }}"
+          tag_name: "${{ inputs.armbian_version }}-ht2-ubuntu22.04-xfce"
+          name: "Armbian ${{ inputs.armbian_version }} - Hinlink-ht2 - Ubuntu 22.04 XFCE"
+          body: |
+            ### 适配信息
+            - 开发板：Hinlink-ht2/Solo派B
+            - 系统：Ubuntu 22.04 LTS (Jammy)
+            - 桌面环境：XFCE（轻量、低资源占用）
+            - 内核：${{ inputs.armbian_kernel_branch }}（RK原厂内核，硬件适配最优）
+            
+            ### 使用说明
+            1. 下载后缀为.img.xz的镜像文件
+            2. 用BalenaEtcher等工具烧录到SD卡/eMMC
+            3. 插入开发板，上电启动
+            4. 默认账号：root，密码：1234（首次登录强制修改）
           files: output/artifact/*
           draft: false
           prerelease: false
