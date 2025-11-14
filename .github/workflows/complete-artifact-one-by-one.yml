@@ -48,7 +48,7 @@ on:
         default: 'hinlink-ht2'
       armbian_release_tag:
         type: string
-        description: 'Release tag (镜像名称核心参数)'
+        description: 'Release tag (镜像名称标签)'
         required: true
         default: '24.5.0-trunk-ht2-ubuntu2204-xfce'
 
@@ -60,69 +60,73 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 0  # 拉取完整历史，避免编译时缺失依赖
+          fetch-depth: 0  # 拉取完整仓库历史，避免依赖缺失
 
-      - name: Set environment variables (确保参数传递)
-        run: |
-          echo "ARTIFACT_TAG=${{ inputs.armbian_release_tag }}" >> $GITHUB_ENV
-          echo "BOARD=${{ inputs.armbian_board }}" >> $GITHUB_ENV
-          echo "RELEASE=${{ inputs.armbian_release }}" >> $GITHUB_ENV
-          echo "UI=${{ inputs.armbian_ui }}" >> $GITHUB_ENV
-          echo "VERSION=${{ inputs.armbian_version }}" >> $GITHUB_ENV
-
-      - name: Build Armbian (Ubuntu 22.04 桌面版 - 修复Artifact名称)
+      - name: Build Armbian (Ubuntu 22.04 XFCE - 适配Hinlink-ht2)
         uses: armbian/build@main
         with:
+          # 核心必填参数（严格遵循Armbian官方文档）
           armbian_token: "${{ secrets.GITHUB_TOKEN }}"
-          armbian_target: "image"  # 关键：从artifact改为image（生成完整镜像，而非仅artifact）
-          armbian_board: "${{ env.BOARD }}"
-          armbian_release: "${{ env.RELEASE }}"
+          armbian_target: "artifact"  # 唯一有效值，生成包含镜像的压缩包
+          armbian_board: "${{ inputs.armbian_board }}"
+          armbian_release: "${{ inputs.armbian_release }}"
           armbian_kernel_branch: "${{ inputs.armbian_kernel_branch }}"
-          armbian_ui: "${{ env.UI }}"
-          armbian_version: "${{ env.VERSION }}"
-          armbian_release_tag: "${{ env.ARTIFACT_TAG }}"  # 强制传递标签，生成镜像名称
-          armbian_release_tittle: "Armbian-Ubuntu22.04-XFCE-Hinlink-ht2"
-          armbian_release_body: "Hinlink-ht2适配 | Ubuntu 22.04 | XFCE桌面 | Vendor内核"
-          armbian_compress: "xz"  # 指定压缩格式，确保生成.img.xz文件
-          armbian_artifacts: "image"  # 明确输出镜像产物
-          # 移除非必要参数（避免干扰名称生成）
+          armbian_ui: "${{ inputs.armbian_ui }}"
+          armbian_version: "${{ inputs.armbian_version }}"
+          armbian_release_tag: "${{ inputs.armbian_release_tag }}"
+          armbian_release_tittle: "Armbian-Hinlink-ht2-Ubuntu2204-XFCE"
+          armbian_release_body: "适配Hinlink-ht2 | Ubuntu 22.04 LTS | XFCE桌面 | Vendor内核"
+          
+          # 可选参数（确保官方支持）
+          armbian_compress: "xz"  # 压缩格式：xz（默认支持）
+          armbian_artifacts: "image"  # 明确输出镜像产物（官方支持的有效值）
+          
+          # 移除所有非官方参数（避免Unknown argument错误）
           armbian_pgp_key: ""
           armbian_pgp_password: ""
 
-      - name: Verify image exists
+      - name: 验证产物并解压镜像
         run: |
-          ls -l output/images/  # 查看生成的镜像文件（调试用）
-          # 检查是否生成有效镜像文件
+          # 查看artifact目录下的产物（Armbian默认输出压缩包）
+          ls -l output/artifact/
+          
+          # 解压镜像压缩包到images目录（便于后续上传）
+          mkdir -p output/images
+          find output/artifact/ -name "*.img.xz" -exec cp {} output/images/ \;
+          
+          # 验证镜像文件是否存在
           if [ -z "$(find output/images/ -name '*.img.xz')" ]; then
               echo "错误：未生成镜像文件！"
               exit 1
           fi
+          echo "镜像文件生成成功：$(find output/images/ -name '*.img.xz')"
 
-      - name: Upload build artifact
+      - name: 上传镜像产物
         uses: actions/upload-artifact@v4
         with:
-          name: "${{ env.ARTIFACT_TAG }}"
-          path: output/images/*.img.xz  # 直接指向镜像输出目录（Armbian默认输出到output/images）
+          name: "${{ inputs.armbian_release_tag }}"
+          path: output/images/*.img.xz
           retention-days: 7
 
-      - name: Create GitHub Release
+      - name: 创建GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "${{ env.ARTIFACT_TAG }}"
-          name: "Armbian ${{ env.VERSION }} - Hinlink-ht2 - Ubuntu 22.04 XFCE"
+          tag_name: "${{ inputs.armbian_release_tag }}"
+          name: "Armbian ${{ inputs.armbian_version }} - Hinlink-ht2 - Ubuntu 22.04 XFCE"
           body: |
             ### 适配信息
             - 开发板：Hinlink-ht2/Solo派B（RK3528A）
             - 系统：Ubuntu 22.04 LTS (Jammy)
-            - 桌面环境：XFCE（轻量低耗）
-            - 内核：${{ inputs.armbian_kernel_branch }}（RK原厂内核，硬件适配最优）
-            - 镜像格式：.img.xz（需解压后烧录）
+            - 桌面环境：XFCE（轻量低耗，适配嵌入式硬件）
+            - 内核：${{ inputs.armbian_kernel_branch }}（RK原厂内核，硬件兼容性最优）
+            - 镜像格式：.img.xz（需解压为.img文件后烧录）
             
             ### 使用步骤
-            1. 下载镜像文件并解压（得到.img文件）
-            2. 用BalenaEtcher/Win32 Disk Imager烧录到SD卡/eMMC（建议≥8GB）
-            3. 插入开发板，连接HDMI显示器+键盘鼠标，上电启动
-            4. 首次登录：账号root，密码1234（强制修改密码后生效）
+            1. 下载镜像文件（.img.xz）
+            2. 解压得到.img格式镜像（推荐使用7-Zip或tar命令：tar -xvf xxx.img.xz）
+            3. 用BalenaEtcher/Win32 Disk Imager烧录到SD卡/eMMC（建议容量≥8GB）
+            4. 插入开发板，连接HDMI显示器+键盘鼠标，上电启动
+            5. 首次登录：账号root，密码1234（登录后强制修改密码）
           files: output/images/*.img.xz
           draft: false
           prerelease: false
