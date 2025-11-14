@@ -1,134 +1,92 @@
-name: Build Hinlink-ht2 Ubuntu 22.04 XFCE (100% Working)
-
+name: Build One by One (anyone)
 on:
   workflow_dispatch:
+    inputs:
+      armbian_board:
+        description: 'Board name (e.g. hinlink-ht2)'
+        required: true
+        default: 'hinlink-ht2'
+        type: choice
+        options:
+          - hinlink-ht2
+      armbian_userspace:
+        description: 'Userspace (jammy = Ubuntu 22.04)'
+        required: true
+        default: 'jammy'
+        type: choice
+        options:
+          - jammy
+          - focal
+          - bookworm
+          - bullseye
+      armbian_kernel_branch:
+        description: 'Kernel branch (vendor = rk3528a 适配)'
+        required: true
+        default: 'vendor'
+        type: choice
+        options:
+          - vendor
+          - current
+          - edge
+      armbian_ui:
+        description: 'User Interface (xfce = 轻量桌面)'
+        required: true
+        default: 'xfce'
+        type: choice
+        options:
+          - xfce
+          - gnome
+          - kde
+          - mate
+          - minimal
+      armbian_version:
+        description: 'Armbian version (24.5.0-trunk = 兼容版)'
+        required: true
+        default: '24.5.0-trunk'
+      armbian_build_target:
+        description: 'Build target'
+        required: true
+        default: 'image'
+        type: choice
+        options:
+          - image
+          - rootfs
+          - kernel
+          - uboot
+          - dtb
 
 jobs:
-  build-ht2-ubuntu:
+  build:
     runs-on: ubuntu-22.04
     steps:
-      - name: 检出Armbian官方主分支（main分支，100%存在）
+      - name: Checkout Armbian OS repo
         uses: actions/checkout@v4
         with:
           repository: armbian/os
-          submodules: recursive
+          ref: main
           fetch-depth: 0
-          path: armbian-os
-          ref: main  # 修正：Armbian/os 仓库默认主分支是 main，不是 trunk
 
-      - name: 安装官方完整依赖（避免任何遗漏）
-        run: |
-          cd armbian-os
-          # 官方依赖安装脚本（最权威，覆盖所有编译需求）
-          sudo ./scripts/install-dependencies.sh || { echo "依赖安装失败，重试一次"; sudo ./scripts/install-dependencies.sh; }
-          # 补充Python依赖，解决版本冲突
-          pip3 install --upgrade setuptools wheel
-          # 确保编译脚本可执行
-          chmod +x compile.sh
-          # 验证脚本和依赖
-          if [ ! -f compile.sh ]; then
-              echo "❌ compile.sh 脚本缺失！"
-              ls -la && pwd
-              exit 1
-          fi
-          echo "✅ 依赖安装完成，脚本就绪"
+      - name: Build Armbian image
+        uses: armbian/build@main  # 升级到最新兼容版本
+        with:
+          armbian_board: ${{ inputs.armbian_board }}
+          armbian_userspace: ${{ inputs.armbian_userspace }}
+          armbian_kernel_branch: ${{ inputs.armbian_kernel_branch }}
+          armbian_ui: ${{ inputs.armbian_ui }}
+          armbian_version: ${{ inputs.armbian_version }}
+          armbian_build_target: ${{ inputs.armbian_build_target }}
+          armbian_config: |
+            ENABLE_SSH=yes  # 默认开启 SSH（方便调试）
+            USER_NAME=armbian  # 默认用户名
+            USER_PASSWORD=1234  # 默认密码（可自行修改）
+            ROOT_PASSWORD=1234  # root 密码（可自行修改）
+            IMAGE_TYPE=desktop  # 强制桌面版镜像
+            STORAGE_DEVICE=mmc  # 适配 HT2 eMMC/SD 卡启动
+            BOOT_LOGO=armbian  # 保留默认 logo
 
-      - name: 核心编译（RK3528通用板型+最小化参数）
-        run: |
-          cd armbian-os
-          # 最终确认：使用Armbian官方支持的RK3528板型（rock3a），兼容ht2
-          BOARD="rock3a"
-          RELEASE="jammy"  # 固定Ubuntu 22.04 LTS
-          BRANCH="current"  # 社区稳定内核（适配性最优）
-          UI="xfce"  # 轻量桌面，嵌入式友好
-          IMAGE_NAME="hinlink-ht2-ubuntu2204-xfce-final-2025"
-
-          # 执行编译（仅保留核心参数，无任何冗余，避免冲突）
-          ./compile.sh \
-            BOARD="$BOARD" \
-            RELEASE="$RELEASE" \
-            BRANCH="$BRANCH" \
-            BUILD_DESKTOP=yes \
-            DESKTOP_ENVIRONMENT="$UI" \
-            BUILD_MINIMAL=no \
-            KERNEL_ONLY=no \
-            KERNEL_CONFIGURE=no \
-            IMAGE_NAME="$IMAGE_NAME" \
-            COMPRESS_IMAGE=xz \
-            SHOW_DEBUG=yes \
-            DEBUG=yes 2>&1 | tee compile.log  # 日志保存到文件，便于排查
-
-      - name: 捕获产物+日志（无论成功与否）
-        if: always()
-        run: |
-          cd armbian-os
-          # 创建日志目录，保存编译日志
-          mkdir -p output/logs
-          cp compile.log output/logs/ || true
-          # 输出日志末尾，快速定位错误
-          echo -e "\n=== 编译日志最后100行（定位错误用）==="
-          tail -100 compile.log || true
-
-          # 查找生成的镜像文件（兼容xz/zst格式）
-          IMAGE_FILE=$(find output/images/ -maxdepth 1 -name "*.img.xz" -o -name "*.img.zst" | head -n1)
-          if [ -n "$IMAGE_FILE" ]; then
-              echo -e "\n✅ 镜像生成成功！路径：$IMAGE_FILE"
-              echo "IMAGE_FILE=$IMAGE_FILE" >> $GITHUB_ENV
-              echo "IMAGE_NAME=$(basename "$IMAGE_FILE")" >> $GITHUB_ENV
-          else
-              echo -e "\n❌ 未生成镜像文件！查看上方日志定位错误"
-              exit 1
-          fi
-
-      - name: 上传镜像+日志（方便使用和排查）
-        if: env.IMAGE_FILE != ''
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.IMAGE_NAME }}-full-package
-          path: |
-            ${{ env.IMAGE_FILE }}
-            armbian-os/output/logs/
-          retention-days: 30  # 延长保留时间，方便下载
-
-      - name: 创建GitHub Release（最终版）
-        if: env.IMAGE_FILE != ''
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.IMAGE_NAME }}
-          name: Hinlink-ht2 最终兼容版 - Ubuntu 22.04 XFCE
-          body: |
-            ### 🎯 适配核心信息
-            - 开发板：Hinlink-ht2/Solo派B（RK3528A）
-            - 系统：Ubuntu 22.04 LTS (Jammy) - 长期支持，稳定可靠
-            - 桌面环境：XFCE 4.16 - 轻量低耗，嵌入式硬件完美适配
-            - 内核版本：Armbian Current 稳定内核（6.1.x系列）
-            - 板型兼容：基于 Rock3A（Armbian官方支持的RK3528板型，硬件同源，功能无差异）
-            
-            ### 📦 镜像信息
-            - 镜像格式：.img.xz（压缩包，需解压后烧录）
-            - 建议存储：SD卡/eMMC ≥8GB（Class 10及以上）
-            - 默认账号：root / 密码：1234（首次登录强制修改）
-            
-            ### 🚀 快速使用步骤
-            1. 下载镜像包（含镜像文件+编译日志）
-            2. 解压镜像：
-               - Windows：用7-Zip右键解压
-               - Linux/Mac：`tar -xvf 文件名.img.xz`
-            3. 烧录工具：BalenaEtcher（推荐，自动识别镜像，支持SD卡/eMMC）
-            4. 启动开发板：插入烧录好的存储介质，连接HDMI显示器+键盘鼠标，上电即可
-            5. 初始化配置：登录后按提示修改密码，执行 `sudo apt update && sudo apt upgrade -y` 更新系统
-            
-            ### ⚠️ 兼容版功能说明
-            - 已测试功能：HDMI显示、USB接口、网口、WiFi、桌面环境、SSH远程登录
-            - 若某功能异常：执行 `sudo armbian-config` → 进入「System」→「Install Drivers」安装对应驱动
-            - 完美适配建议：若需ht2专属板型，可参考 `config/boards/rock3a.conf` 新建 `hinlink-ht2.conf`，修改设备树路径即可
-            
-            ### 🛠️ 常见问题解决
-            1. 无法联网：
-               - 有线：`sudo nmcli connection up "Wired connection 1"`
-               - WiFi：`sudo nmtui` 图形化配置WiFi
-            2. 桌面卡顿：`sudo apt remove -y libreoffice* thunderbird && sudo apt autoremove -y` 卸载冗余软件
-            3. SSH登录：路由器后台查看开发板IP，执行 `ssh root@IP地址`（密码为修改后的新密码）
-          files: ${{ env.IMAGE_FILE }}
-          draft: false
-          prerelease: false
+          name: armbian-hinlink-ht2-ubuntu22.04-xfce
+          path: ${{ github.workspace }}/output/images/*.img.xz  # 镜像压缩包路径
+          retention-days: 30  # 镜像保留 30 天
