@@ -19,13 +19,14 @@ on:
         - legacy
         - current
         - edge
+        - vendor  # 原链接要求：新增vendor选项（支持rk内核）
         default: 'current'
 
       armbian_release:
         type: choice
         description: 'Userspace'
         options:
-        - jammy
+        - jammy 
         - mantic
         - bookworm
         - trixie
@@ -361,7 +362,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
 
-      - uses: armbian/build@v25.5.1
+      - uses: armbian/build@main  # 原链接要求：替换旧版本v25.5.1为main分支
         with:
           armbian_token:              "${{secrets.GITHUB_TOKEN}}"
           armbian_target:             "${{inputs.armbian_target}}"
@@ -369,6 +370,7 @@ jobs:
           armbian_kernel_branch:      "${{inputs.armbian_kernel_branch}}"
           armbian_ui:                 "${{inputs.armbian_ui}}"
           armbian_board:              "${{inputs.armbian_board}}"
+          armbian_version:            "${{inputs.armbian_version}}"  # 原链接要求：新增版本参数传递
           armbian_release_tittle:     "Armbian SDK"
           armbian_release_body:       "Virtual images for x86 and arm64"
           armbian_pgp_key:            "${{secrets.GPG_KEY1}}"
