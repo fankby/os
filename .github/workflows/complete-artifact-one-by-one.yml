@@ -28,6 +28,7 @@ on:
         options:
         - jammy 
         - mantic
+        - noble  
         - bookworm
         - trixie
         - sid
